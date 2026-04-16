@@ -2,11 +2,12 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
-using System.CommandLine;
+using TaskManager;
+using TaskManager.Infrastructure;
 using TaskManagerLibrary.Infrastructure;
 using TaskManagerLibrary.Interfaces;
 using TaskManagerLibrary.Service;
-using TaskManagerLibrary.Models;
+
 
 class Program
 {
@@ -31,13 +32,16 @@ class Program
                     
                     services.AddSingleton<ITaskRepository>(new JsonTaskRepository(storagePath));
                     services.AddSingleton<ITaskService, TaskService>();
+                    services.AddSingleton<ITaskUI, ConsoleTaskUI>();
+                    
+                    services.AddTransient<TaskCommandHandler>();
                 })
                 .UseSerilog()
                 .Build();
             
-            var taskService = host.Services.GetRequiredService<ITaskService>();
+            var handler = host.Services.GetRequiredService<TaskCommandHandler>();
             
-            return await SetupCommandLine(taskService, args);
+            return await SetupCommandLine(handler, args);
         }
         catch (Exception ex)
         {
@@ -57,142 +61,12 @@ class Program
             .AddEnvironmentVariables();
     }
     
-    static async Task<int> SetupCommandLine(ITaskService taskService, string[] args)
+    static async Task<int> SetupCommandLine(TaskCommandHandler handler, string[] args)
     {
-        var nameArgument = new Argument<string>("name") { Description = "Task description" };
+        var builder = new CommandLineBuilder(handler);
+        var rootCommand = builder.Build();
+        var parseResult = rootCommand.Parse(args);
         
-        var priorityOption = new Option<TaskPriority>("--priority")
-        {
-            Description = "Task priority level",
-            DefaultValueFactory = _ => TaskPriority.Medium
-        };
-
-        var categoryOption = new Option<string>("--category")
-        {
-            Description = "Task category",
-            DefaultValueFactory = _ => "General"
-        };
-
-        var deadlineOption = new Option<DateTime?>("--deadline")
-        {
-            Description = "Due date (yyyy-MM-dd)"
-        };
-
-        var idArgument = new Argument<string>("id") { Description = "Task index (e.g. 1) or GUID" };
-        
-        
-        var addCommand = new Command("add", "Add a new task")
-        {
-            Arguments = { nameArgument },
-            Options = { priorityOption, categoryOption, deadlineOption }
-        };
-
-        var listCommand = new Command("list", "List all tasks");
-        
-        var startCommand = new Command("start", "Mark a task as in progress")
-        {
-            Arguments = { idArgument }
-        };
-
-        var completeCommand = new Command("complete", "Mark a task as complete")
-        {
-            Arguments = { idArgument }
-        };
-
-        var statsCommand = new Command("stats", "Show task statistics");
-        
-        
-        var rootCommand = new RootCommand("Task Manager CLI")
-        {
-            Subcommands = { addCommand, listCommand, startCommand, completeCommand, statsCommand }
-        };
-        
-
-        addCommand.SetAction(async parseResult => 
-        {
-            var name = parseResult.GetValue(nameArgument)!;
-            var priority = parseResult.GetValue(priorityOption);
-            var category = parseResult.GetValue(categoryOption)!;
-            var deadline = parseResult.GetValue(deadlineOption);
-            
-            await taskService.AddTaskAsync(name, priority, category, deadline);
-    
-            Console.WriteLine($"Task '{name}' added successfully.");
-        });
-
-        listCommand.SetAction(async parseResult =>
-        {
-            var tasks = await taskService.GetAllTasksAsync();
-            var sortedTasks = tasks.OrderByDescending(t => t.CreatedAt).ToList();
-            if (tasks.Count == 0)
-            {
-                Console.WriteLine("No tasks found.");
-                return;
-            }
-            
-            int index = 1; 
-            foreach (var t in sortedTasks)
-            {
-                string status = t.State switch
-                {
-                    TaskState.Done => "✓",
-                    TaskState.InProgress => "~",
-                    _ => " "
-                };
-                
-                string dateStr = t.CreatedAt.ToString("dd.MM.");
-    
-                Console.WriteLine($"{index}. [{status}] {t.Name} (Vytvorené: {dateStr}, Priorita: {t.Priority})");
-                index++;
-            }
-        });
-        
-        startCommand.SetAction(async parseResult =>
-        {
-            var input = parseResult.GetValue(idArgument);
-            var tasks = await taskService.GetAllTasksAsync();
-
-            if (int.TryParse(input, out int taskIndex) && taskIndex > 0 && taskIndex <= tasks.Count)
-            {
-                var targetId = tasks[taskIndex - 1].Id;
-                
-                await taskService.UpdateStatusAsync(targetId, TaskState.InProgress);
-        
-                Console.WriteLine($"Task {taskIndex} is now In Progress!");
-            }
-            else {
-                Console.WriteLine("Invalid task number.");
-            }
-        });
-
-        completeCommand.SetAction(async parseResult =>
-        {
-            var input = parseResult.GetValue(idArgument).ToString(); 
-
-            var tasks = await taskService.GetAllTasksAsync();
-            
-            if (int.TryParse(input, out int taskIndex) && taskIndex > 0 && taskIndex <= tasks.Count)
-            {
-                var actualId = tasks[taskIndex - 1].Id;
-                await taskService.UpdateStatusAsync(actualId, TaskState.Done);
-                Console.WriteLine($"Task {taskIndex} was completed.");
-            }
-            else
-            {
-                Console.WriteLine("Invalid task number.");
-            }
-        });
-
-        statsCommand.SetAction(async parseResult =>
-        {
-            var s = await taskService.GetStatisticsAsync();
-            Console.WriteLine("\n--- TASK STATISTICS ---");
-            Console.WriteLine($"Total tasks: {s.TotalTasks}");
-            Console.WriteLine($"Average days to deadline: {s.AverageDaysToDeadline:F1}");
-            Console.WriteLine("\nTasks by State:");
-            foreach(var entry in s.TasksByState) Console.WriteLine($"  {entry.Key}: {entry.Value}");
-        });
-        
-        return await rootCommand.Parse(args).InvokeAsync();
+        return await parseResult.InvokeAsync();
     }
 }

@@ -6,4 +6,5 @@ public interface ITaskRepository
 {
     Task<List<TaskModel>> LoadTasksAsync();
     Task SaveTasksAsync(List<TaskModel> tasks);
+    Task<bool> DeleteAsync(Guid id);
 }

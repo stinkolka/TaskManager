@@ -1,127 +1,138 @@
-﻿using TaskManagerLibrary.Interfaces;
+﻿using Microsoft.Extensions.Logging;
+using TaskManagerLibrary.Interfaces;
 using TaskManagerLibrary.Models;
-using Microsoft.Extensions.Logging;
 
 namespace TaskManagerLibrary.Service;
 
 public class TaskService : ITaskService
 {
-    private readonly ITaskRepository _repository;
-    private readonly ILogger<TaskService> _logger;
-    
-    public TaskService(ITaskRepository repository, ILogger<TaskService> logger)
+    private readonly ITaskRepository _taskRepository;
+    private readonly ILogger<TaskService> _serviceLogger;
+
+    public TaskService(ITaskRepository taskRepository, ILogger<TaskService> serviceLogger)
     {
-        _repository = repository;
-        _logger = logger;
+        _taskRepository = taskRepository;
+        _serviceLogger = serviceLogger;
     }
 
-    public async Task AddTaskAsync(string name, TaskPriority priority, string category, DateTime? deadline)
+    public async Task AddTaskAsync(string taskName, TaskPriority priority, string categoryName, DateTime? deadlineDate)
     {
         try
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(name, nameof(name));
-            
-            var loadedTasks = await _repository.LoadTasksAsync();
-            
+            ArgumentException.ThrowIfNullOrWhiteSpace(taskName);
+
+            var taskList = await _taskRepository.LoadTasksAsync();
+
             var newTask = new TaskModel
             {
                 Id = Guid.NewGuid(),
-                Name = name,
+                Name = taskName,
                 Priority = priority,
-                Category = category,
-                Deadline = deadline,
+                Category = categoryName,
+                Deadline = deadlineDate,
                 State = TaskState.Todo,
                 CreatedAt = DateTime.UtcNow
             };
-            
-            loadedTasks.Add(newTask);
-            await _repository.SaveTasksAsync(loadedTasks);
-            
-            _logger.LogInformation("Task with ID {TaskId} and name '{Name}' was successfully added.", newTask.Id, name);
+
+            taskList.Add(newTask);
+            await _taskRepository.SaveTasksAsync(taskList);
+
+            _serviceLogger.LogInformation("Task with ID {TaskId} and name '{Name}' was successfully added.", newTask.Id,
+                taskName);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error occurred while adding task with name '{Name}'.", name);
+            _serviceLogger.LogError(ex, "Error occurred while adding task with name '{Name}'.", taskName);
             throw;
         }
     }
 
     public async Task<List<TaskModel>> GetAllTasksAsync()
     {
-        _logger.LogDebug("Loading all tasks from the repository.");
-        return await _repository.LoadTasksAsync();
+        _serviceLogger.LogDebug("Loading all tasks from the repository.");
+        return await _taskRepository.LoadTasksAsync();
     }
 
-    public async Task UpdateStatusAsync(Guid id, TaskState state)
+    public async Task UpdateStatusAsync(Guid taskId, TaskState newState)
     {
         try
         {
-            var loadedTasks = await _repository.LoadTasksAsync();
-            var taskToUpdate = loadedTasks.FirstOrDefault(t => t.Id == id);
+            var taskList = await _taskRepository.LoadTasksAsync();
+            var taskToUpdate = taskList.FirstOrDefault(t => t.Id == taskId);
 
             if (taskToUpdate == null)
             {
-                _logger.LogWarning("Attempted to update non-existent task with ID {TaskId}.", id);
-                throw new KeyNotFoundException($"Task with ID {id} was not found.");
+                _serviceLogger.LogWarning("Attempted to update non-existent task with ID {TaskId}.", taskId);
+                throw new KeyNotFoundException($"Task with ID {taskId} was not found.");
             }
 
             var oldState = taskToUpdate.State;
-            taskToUpdate.State = state;
-            
-            await _repository.SaveTasksAsync(loadedTasks);
-            
-            _logger.LogInformation("Task {TaskId} state changed from {OldState} to {NewState}.", id, oldState, state);
+            taskToUpdate.State = newState;
+
+            await _taskRepository.SaveTasksAsync(taskList);
+
+            _serviceLogger.LogInformation("Task {TaskId} state changed from {OldState} to {NewState}.", taskId,
+                oldState, newState);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error occurred while updating status for task {TaskId}.", id);
+            _serviceLogger.LogError(ex, "Error occurred while updating status for task {TaskId}.", taskId);
             throw;
         }
     }
 
-    public async Task CompleteTaskAsync(Guid id)
+    public async Task CompleteTaskAsync(Guid taskId)
     {
-        _logger.LogInformation("Marking task {TaskId} as completed.", id);
-        await UpdateStatusAsync(id, TaskState.Done);
+        _serviceLogger.LogInformation("Marking task {TaskId} as completed.", taskId);
+        await UpdateStatusAsync(taskId, TaskState.Done);
     }
 
     public async Task<TaskStatisticsModel> GetStatisticsAsync()
     {
         try
         {
-            _logger.LogInformation("Generating task statistics.");
-            _logger.LogDebug("Loading all tasks from the repository.");
-            var loadedTasks = await _repository.LoadTasksAsync();
-            
-            var taskStatistics = new TaskStatisticsModel
+            _serviceLogger.LogInformation("Generating task statistics.");
+            var taskList = await _taskRepository.LoadTasksAsync();
+
+            var statisticsResult = new TaskStatisticsModel
             {
-                TotalTasks = loadedTasks.Count,
+                TotalTasks = taskList.Count,
                 
-                TasksByState = loadedTasks
+                CompletionRate = taskList.Count == 0 
+                    ? 0 
+                    : (double)taskList.Count(task => task.State == TaskState.Done) / taskList.Count * 100,
+
+                TasksByState = taskList
                     .GroupBy(t => t.State)
                     .ToDictionary(g => g.Key, g => g.Count()),
 
-                TasksByPriority = loadedTasks
+                TasksByPriority = taskList
                     .GroupBy(t => t.Priority)
                     .ToDictionary(g => g.Key, g => g.Count()),
-                
-                TasksByCategory = loadedTasks
+
+                TasksByCategory = taskList
                     .GroupBy(t => t.Category ?? "Uncategorized")
                     .ToDictionary(g => g.Key, g => g.Count()),
-                
-                AverageDaysToDeadline = loadedTasks
+
+                AverageDaysToDeadline = taskList
                     .Where(t => t.Deadline.HasValue && t.State != TaskState.Done)
                     .Select(t => (t.Deadline.Value - DateTime.UtcNow).TotalDays)
                     .DefaultIfEmpty(0)
                     .Average()
             };
 
-            return taskStatistics;
+            return statisticsResult;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error occurred while generating statistics.");
+            _serviceLogger.LogError(ex, "Error occurred while generating statistics.");
             throw;
         }
+    }
+
+    public async Task<bool> DeleteTaskAsync(Guid taskId)
+    {
+        _serviceLogger.LogInformation("Requesting deletion of task {TaskId}.", taskId);
+        return await _taskRepository.DeleteAsync(taskId);
     }
 }

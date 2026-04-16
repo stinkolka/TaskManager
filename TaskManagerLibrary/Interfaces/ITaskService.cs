@@ -9,4 +9,5 @@ public interface ITaskService
     Task UpdateStatusAsync(Guid id, TaskState state);
     Task CompleteTaskAsync(Guid id);
     Task<TaskStatisticsModel> GetStatisticsAsync();
+    Task<bool> DeleteTaskAsync(Guid id);
 }
